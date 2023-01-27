@@ -15,9 +15,13 @@ def main():
     args = singer.parse_args(required_config_keys)
 
     config = args.config
-    if args.dev:
-        LOGGER.warning("Executing Tap in Dev mode")
-    client = QuickbooksClient(args.config_path, config, args.dev)
+    
+    # Disable dev mode: Not supported in Peliqan's singer-python
+    #if args.dev:
+    #    LOGGER.warning("Executing Tap in Dev mode")
+    #client = QuickbooksClient(args.config_path, config, args.dev)
+    
+    client = QuickbooksClient(args.config_path, config)
     state = args.state
 
     if args.properties and not args.catalog:
