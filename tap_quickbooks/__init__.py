@@ -15,13 +15,14 @@ def main():
     args = singer.parse_args(required_config_keys)
 
     config = args.config
-    
-    # Disable dev mode: Not supported in Peliqan's singer-python
-    #if args.dev:
-    #    LOGGER.warning("Executing Tap in Dev mode")
-    #client = QuickbooksClient(args.config_path, config, args.dev)
-    
-    client = QuickbooksClient(args.config_path, config)
+
+    # dev_mode lets the tap use a pre-issued access_token without rotating the
+    # refresh_token. Toggled via config flag because Peliqan's singer-python
+    # fork doesn't expose `--dev` on the CLI. Used by the regression harness.
+    dev_mode = bool(config.get('dev_mode'))
+    if dev_mode:
+        LOGGER.warning("Executing tap in dev mode (using existing access_token, no refresh)")
+    client = QuickbooksClient(args.config_path, config, dev_mode)
     state = args.state
 
     if args.properties and not args.catalog:

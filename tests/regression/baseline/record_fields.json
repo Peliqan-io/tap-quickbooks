@@ -1,0 +1,20 @@
+{
+  "accounts": [
+    "AccountSubType",
+    "AccountType",
+    "AcctNum",
+    "Active",
+    "Classification",
+    "CurrencyRef",
+    "CurrentBalance",
+    "CurrentBalanceWithSubAccounts",
+    "FullyQualifiedName",
+    "Id",
+    "MetaData",
+    "Name",
+    "ParentRef",
+    "SubAccount",
+    "SyncToken",
+    "domain"
+  ]
+}
