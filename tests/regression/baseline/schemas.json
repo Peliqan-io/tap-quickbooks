@@ -1,0 +1,190 @@
+{
+  "accounts": {
+    "properties": {
+      "AccountAlias": {
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "AccountSubType": {
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "AccountType": {
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "AcctNum": {
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "Active": {
+        "type": [
+          "null",
+          "boolean"
+        ]
+      },
+      "Classification": {
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "CurrencyRef": {
+        "properties": {
+          "name": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "value": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        },
+        "type": [
+          "null",
+          "object"
+        ]
+      },
+      "CurrentBalance": {
+        "format": "singer.decimal",
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "CurrentBalanceWithSubAccounts": {
+        "format": "singer.decimal",
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "Description": {
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "FullyQualifiedName": {
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "Id": {
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "MetaData": {
+        "properties": {
+          "CreateTime": {
+            "format": "date-time",
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "LastUpdatedTime": {
+            "format": "date-time",
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        },
+        "type": [
+          "null",
+          "object"
+        ]
+      },
+      "Name": {
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "ParentRef": {
+        "properties": {
+          "name": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "value": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        },
+        "type": [
+          "null",
+          "object"
+        ]
+      },
+      "SubAccount": {
+        "type": [
+          "null",
+          "boolean"
+        ]
+      },
+      "SyncToken": {
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "TaxCodeRef": {
+        "properties": {
+          "name": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "value": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        },
+        "type": [
+          "null",
+          "object"
+        ]
+      },
+      "TxnLocationType": {
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "domain": {
+        "type": [
+          "null",
+          "string"
+        ]
+      }
+    },
+    "type": [
+      "null",
+      "object"
+    ]
+  }
+}

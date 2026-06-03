@@ -11,7 +11,8 @@ setup(name='tap-quickbooks',
       py_modules=['tap_quickbooks'],
       install_requires=[
           'singer-python @ git+https://github.com/peliqan-io/singer-python@master',
-          'requests==2.23.0',
+          'backoff>=2.2.1',
+          'requests>=2.28.0',
           'requests_oauthlib==1.3.0',
       ],
       extras_require={
