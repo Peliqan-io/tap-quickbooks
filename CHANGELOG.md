@@ -1,6 +1,6 @@
 # Change Log
 
-## Unreleased
+## 2.2.0
 
    * Add `general_ledger_report` stream (QuickBooks GeneralLedger report, one record per ledger line with account id/name, debit, credit, memo, name, split account). Optional config: `general_ledger_lookback_days` (default 30), `general_ledger_accounting_method` (default `Accrual`), `general_ledger_columns`.
 
