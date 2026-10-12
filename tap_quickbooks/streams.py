@@ -461,23 +461,31 @@ class GeneralLedgerReport(Stream):
                 raise Exception('GeneralLedger report is missing required columns {}; check '
                                 'general_ledger_columns (got {})'.format(missing, col_keys))
 
-        seen = {}
+        records = []
         for account_id, account_name, cols in self.walk_rows(resp.get('Rows', {}), None, None):
             rec = self.build_record(col_keys, cols, account_id, account_name)
-            if rec is None:
-                continue
-            # Key on the line's identity, not its content, so an edited or backdated line overwrites its
-            # old row. Lines of one transaction share a date, hence a window, and keep their position
-            # within (transaction, account) between syncs. Without a transaction id fall back to content.
+            if rec is not None:
+                records.append(rec)
+
+        # Key on the line's identity, not its content, so an edited or backdated line overwrites its
+        # old row. Lines of one transaction share a date, hence a window. Lines of one (transaction,
+        # account) are ranked by content, not by the order QuickBooks returns them, which varies with
+        # the window size. Without a transaction id fall back to content.
+        groups = {}
+        for rec in records:
             if rec.get('TxnId'):
                 fields = ('TxnType', 'TxnId', 'AccountId')
             else:
                 fields = ('TxnType', 'TxnDate', 'DocNumber', 'AccountId', 'Name', 'Memo',
                           'SplitAccount', 'Debit', 'Credit')
             base = '|'.join(str(rec.get(k)) for k in fields)
-            seen[base] = seen.get(base, 0) + 1
-            rec['RowKey'] = hashlib.sha1('{}|{}'.format(base, seen[base]).encode()).hexdigest()
-            yield rec
+            groups.setdefault(base, []).append(rec)
+        for base, lines in groups.items():
+            lines.sort(key=lambda r: tuple(str(r.get(k) or '') for k in (
+                'Memo', 'Debit', 'Credit', 'Name', 'SplitAccount', 'DocNumber', 'TxnDate')))
+            for rank, rec in enumerate(lines, 1):
+                rec['RowKey'] = hashlib.sha1('{}|{}'.format(base, rank).encode()).hexdigest()
+        yield from records
 
     def walk_rows(self, node, account_id, account_name):
         """Yield (account_id, account_name, ColData) for every data row, tracking the enclosing account section."""

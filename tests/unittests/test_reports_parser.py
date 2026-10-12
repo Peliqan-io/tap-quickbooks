@@ -407,3 +407,22 @@ class TestGeneralLedgerSync(unittest.TestCase):
         self.assertEqual("Cash", params["accounting_method"])
         self.assertEqual(streams.GeneralLedgerReport.DEFAULT_COLUMNS, params["columns"])
         self.assertEqual("/v3/company/{realm_id}/reports/GeneralLedger", client.get.call_args.args[0])
+
+    def test_same_account_lines_keep_their_keys_whatever_order_quickbooks_returns(self):
+        lines = [
+            {"type": "Data", "ColData": [
+                {"value": "2024-01-31"}, {"value": "Invoice", "id": "9"}, {"value": "1"},
+                {"value": "Cust"}, {"value": memo}, {"value": "A/R"}, {"value": ""},
+                {"value": amount}]}
+            for memo, amount in (("Rock", "275.00"), ("Rocks", "72.00"), ("Concrete", "75.00"))]
+
+        def parse(rows):
+            response = {"Columns": TestGeneralLedgerParser.RESPONSE["Columns"],
+                        "Rows": {"Row": [{"type": "Section", "Header": {"ColData": [
+                            {"value": "Fountains", "id": "48"}]}, "Rows": {"Row": rows}}]}}
+            return {r["RowKey"]: (r["Memo"], r["Credit"])
+                    for r in streams.GeneralLedgerReport("", "", "").parse_report(response)}
+
+        forward, backward = parse(lines), parse(list(reversed(lines)))
+        self.assertEqual(3, len(forward))
+        self.assertEqual(forward, backward)
