@@ -1,3 +1,4 @@
+import datetime
 import unittest
 import tap_quickbooks.streams as streams
 
@@ -237,3 +238,172 @@ class TestReportsParser(unittest.TestCase):
         reports.parse_report_rows(response["Rows"])
         self.assertEqual(reports.parsed_metadata, expected_data_after_parse_rows)
     
+
+
+class TestGeneralLedgerParser(unittest.TestCase):
+
+    RESPONSE = {
+        "Columns": {"Column": [
+            {"ColTitle": "Date", "MetaData": [{"Name": "ColKey", "Value": "tx_date"}]},
+            {"ColTitle": "Transaction Type", "MetaData": [{"Name": "ColKey", "Value": "txn_type"}]},
+            {"ColTitle": "Num", "MetaData": [{"Name": "ColKey", "Value": "doc_num"}]},
+            {"ColTitle": "Name", "MetaData": [{"Name": "ColKey", "Value": "name"}]},
+            {"ColTitle": "Memo", "MetaData": [{"Name": "ColKey", "Value": "memo"}]},
+            {"ColTitle": "Split", "MetaData": [{"Name": "ColKey", "Value": "split_acc"}]},
+            {"ColTitle": "Debit", "MetaData": [{"Name": "ColKey", "Value": "debt_amt"}]},
+            {"ColTitle": "Credit", "MetaData": [{"Name": "ColKey", "Value": "credit_amt"}]},
+            {"ColTitle": "Balance", "MetaData": [{"Name": "ColKey", "Value": "rbal_nat_amount"}]},
+        ]},
+        "Rows": {"Row": [
+            {"type": "Section",
+             "Header": {"ColData": [{"value": "Payroll Expenses", "id": "10"}]},
+             "Rows": {"Row": [
+                 {"type": "Data", "ColData": [
+                     {"value": "Beginning Balance"}, {"value": ""}, {"value": ""}, {"value": ""},
+                     {"value": ""}, {"value": ""}, {"value": ""}, {"value": ""}, {"value": "0.00"}]},
+                 {"type": "Data", "ColData": [
+                     {"value": "2024-01-31"}, {"value": "Payroll Check", "id": "55"}, {"value": "7"},
+                     {"value": "Jane"}, {"value": "Wages"}, {"value": "Bank"}, {"value": "1,250.50"},
+                     {"value": ""}, {"value": "1250.50"}]},
+             ]},
+             "Summary": {"ColData": [{"value": "Total for Payroll Expenses"}]}},
+            {"type": "Section",
+             "Header": {"ColData": [{"value": "Payroll Liabilities", "id": "20"}]},
+             "Rows": {"Row": [
+                 {"type": "Section",
+                  "Header": {"ColData": [{"value": "Federal Taxes", "id": "21"}]},
+                  "Rows": {"Row": [
+                      {"type": "Data", "ColData": [
+                          {"value": "2024-01-31"}, {"value": "Payroll Check", "id": "55"}, {"value": "7"},
+                          {"value": ""}, {"value": "Tax"}, {"value": "Bank"}, {"value": ""},
+                          {"value": "100.00"}, {"value": "100.00"}]},
+                  ]}},
+             ]}},
+        ]},
+    }
+
+    def test_parse_report(self):
+        stream = streams.GeneralLedgerReport("", "", "")
+        records = list(stream.parse_report(self.RESPONSE))
+
+        self.assertEqual(2, len(records))
+        wages, tax = records
+        self.assertEqual("10", wages["AccountId"])
+        self.assertEqual("Payroll Expenses", wages["AccountName"])
+        self.assertEqual("55", wages["TxnId"])
+        self.assertEqual("Payroll Check", wages["TxnType"])
+        self.assertEqual("7", wages["DocNumber"])
+        self.assertEqual((1250.5, 0.0), (wages["Debit"], wages["Credit"]))
+        # nested section: innermost account wins
+        self.assertEqual("21", tax["AccountId"])
+        self.assertEqual((0.0, 100.0), (tax["Debit"], tax["Credit"]))
+        self.assertNotEqual(wages["RowKey"], tax["RowKey"])
+
+    def test_identical_lines_get_unique_keys(self):
+        response = {"Columns": self.RESPONSE["Columns"], "Rows": {"Row": [
+            {"type": "Section", "Header": {"ColData": [{"value": "A", "id": "1"}]},
+             "Rows": {"Row": [self.RESPONSE["Rows"]["Row"][0]["Rows"]["Row"][1]] * 2}}]}}
+        records = list(streams.GeneralLedgerReport("", "", "").parse_report(response))
+        self.assertEqual(2, len(records))
+        self.assertNotEqual(records[0]["RowKey"], records[1]["RowKey"])
+
+    def test_window_split_on_bad_request(self):
+        from unittest import mock
+        from tap_quickbooks.client import QuickbooksBadRequestError
+
+        client = mock.Mock()
+        client.minor_version = 65
+        calls = []
+
+        def get(endpoint, params=None):
+            calls.append((params["start_date"], params["end_date"]))
+            if params["start_date"] == "2024-01-01" and params["end_date"] == "2024-01-04":
+                raise QuickbooksBadRequestError("too large")
+            return {"Columns": {"Column": []}, "Rows": {}}
+
+        client.get.side_effect = get
+        stream = streams.GeneralLedgerReport(client, {}, {})
+        list(stream.sync_window(datetime.date(2024, 1, 1), datetime.date(2024, 1, 4)))
+        self.assertEqual([("2024-01-01", "2024-01-04"), ("2024-01-01", "2024-01-02"),
+                          ("2024-01-03", "2024-01-04")], calls)
+
+    def test_edited_line_keeps_its_key(self):
+        """An amount/memo edit must overwrite the old row, not create a second one"""
+        import copy
+        original = list(streams.GeneralLedgerReport("", "", "").parse_report(self.RESPONSE))
+        edited = copy.deepcopy(self.RESPONSE)
+        line = edited["Rows"]["Row"][0]["Rows"]["Row"][1]["ColData"]
+        line[4]["value"] = "Wages (corrected)"
+        line[6]["value"] = "1,300.00"
+        records = list(streams.GeneralLedgerReport("", "", "").parse_report(edited))
+        self.assertEqual(original[0]["RowKey"], records[0]["RowKey"])
+        self.assertEqual(1300.0, records[0]["Debit"])
+
+    def test_missing_required_columns_raises(self):
+        response = {"Columns": {"Column": [
+            {"MetaData": [{"Name": "ColKey", "Value": "tx_date"}]},
+            {"MetaData": [{"Name": "ColKey", "Value": "not_a_column"}]},
+        ]}, "Rows": {}}
+        with self.assertRaises(Exception) as ctx:
+            list(streams.GeneralLedgerReport("", "", "").parse_report(response))
+        self.assertIn("txn_type", str(ctx.exception))
+        self.assertIn("debt_amt", str(ctx.exception))
+
+    def test_empty_report_yields_nothing(self):
+        self.assertEqual([], list(streams.GeneralLedgerReport("", "", "").parse_report({})))
+
+    def test_backdated_line_keeps_its_key(self):
+        import copy
+        original = list(streams.GeneralLedgerReport("", "", "").parse_report(self.RESPONSE))
+        moved = copy.deepcopy(self.RESPONSE)
+        moved["Rows"]["Row"][0]["Rows"]["Row"][1]["ColData"][0]["value"] = "2024-01-15"
+        records = list(streams.GeneralLedgerReport("", "", "").parse_report(moved))
+        self.assertEqual(original[0]["RowKey"], records[0]["RowKey"])
+
+
+class TestGeneralLedgerSync(unittest.TestCase):
+    NOW = datetime.datetime(2024, 3, 15, 10, 0, tzinfo=datetime.timezone.utc)
+
+    def run_sync(self, config, state):
+        from unittest import mock
+        client = mock.Mock()
+        client.minor_version = 65
+        client.get.return_value = {"Columns": {"Column": []}, "Rows": {}}
+        base = {"start_date": "2024-01-01T00:00:00Z"}
+        base.update(config)
+        stream = streams.GeneralLedgerReport(client, base, state)
+        with mock.patch.object(streams.utils, "now", return_value=self.NOW), \
+                mock.patch.object(streams.singer, "write_state"):
+            list(stream.sync())
+        windows = [(c.kwargs["params"]["start_date"], c.kwargs["params"]["end_date"])
+                   for c in client.get.call_args_list]
+        return windows, stream.state
+
+    def test_first_sync_walks_windows_from_start_date_to_today(self):
+        windows, state = self.run_sync({}, {})
+        self.assertEqual([("2024-01-01", "2024-01-31"), ("2024-02-01", "2024-03-02"),
+                          ("2024-03-03", "2024-03-15")], windows)
+        self.assertEqual("2024-03-15T00:00:00+00:00",
+                         state["bookmarks"]["general_ledger_report"]["LastUpdatedTime"])
+
+    def test_bookmark_sync_rereads_lookback_window(self):
+        state = {"bookmarks": {"general_ledger_report": {"LastUpdatedTime": "2024-03-10T00:00:00+00:00"}}}
+        windows, _ = self.run_sync({"general_ledger_lookback_days": "10"}, state)
+        self.assertEqual([("2024-02-29", "2024-03-15")], windows)
+
+    def test_lookback_never_goes_before_start_date(self):
+        state = {"bookmarks": {"general_ledger_report": {"LastUpdatedTime": "2024-01-05T00:00:00+00:00"}}}
+        windows, _ = self.run_sync({}, state)
+        self.assertEqual("2024-01-01", windows[0][0])
+
+    def test_request_params(self):
+        from unittest import mock
+        client = mock.Mock()
+        client.minor_version = 65
+        client.get.return_value = {"Columns": {"Column": []}, "Rows": {}}
+        stream = streams.GeneralLedgerReport(client, {"general_ledger_accounting_method": "Cash"}, {})
+        list(stream.sync_window(datetime.date(2024, 1, 1), datetime.date(2024, 1, 31)))
+        params = client.get.call_args.kwargs["params"]
+        self.assertEqual("Cash", params["accounting_method"])
+        self.assertEqual(streams.GeneralLedgerReport.DEFAULT_COLUMNS, params["columns"])
+        self.assertEqual("/v3/company/{realm_id}/reports/GeneralLedger", client.get.call_args.args[0])

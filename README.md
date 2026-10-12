@@ -38,6 +38,7 @@ This tap:
     * VendorCredits
     * Vendors
     * ProfitAndLossReport
+    * GeneralLedgerReport
     * DeletedObjects
 
 - Includes a schema for each resource reflecting most recent tested data retrieved using the api. See [the schema folder](https://github.com/singer-io/tap-quickbooks/tree/master/tap_quickbooks/schemas) for details.
@@ -73,6 +74,9 @@ These values are all obtained from the oauth steps documented on [quickbook's do
    - `refresh_token` (string): Token to get a new Access token if it expires.
    - `sandbox` (string, optional): Whether to communicate with quickbooks's sandbox or prod account for this application. If you're not sure leave out. Defaults to false.
    - The `request_timeout` is an optional paramater to set timeout for requests. Default: 300 seconds
+   - `general_ledger_lookback_days` (optional): Days before the bookmark that `general_ledger_report` re-reads on each sync to catch backdated postings. Default: 30
+   - `general_ledger_accounting_method` (optional): `Accrual` or `Cash` for `general_ledger_report`. Default: `Accrual`
+   - `general_ledger_columns` (optional): Comma-separated report columns requested for `general_ledger_report`. The default includes `debt_amt` and `credit_amt`, which feed the `Debit` and `Credit` fields.
 
    And the other values mentioned in [the authentication section above](#authentication).
 

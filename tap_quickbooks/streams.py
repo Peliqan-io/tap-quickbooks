@@ -1,3 +1,5 @@
+import hashlib
+import re
 from datetime import timedelta
 
 import singer
@@ -5,6 +7,9 @@ from singer import utils
 from singer.utils import strptime_to_utc
 
 import tap_quickbooks.query_builder as query_builder
+from tap_quickbooks.client import QuickbooksBadRequestError
+
+LOGGER = singer.get_logger()
 
 DATE_WINDOW_SIZE = 29
 
@@ -358,6 +363,172 @@ class ProfitAndLossReport(ReportStream):
     stream_name = 'profit_loss_report'
     endpoint = '/v3/company/{realm_id}/reports/ProfitAndLoss'
 
+class GeneralLedgerReport(Stream):
+    """
+        One record per general ledger line, built from the GeneralLedger report.
+        Reference: https://developer.intuit.com/app/developer/qbo/docs/api/accounting/all-entities/generalledger
+    """
+    stream_name = 'general_ledger_report'
+    endpoint = '/v3/company/{realm_id}/reports/GeneralLedger'
+    key_properties = ['RowKey']
+    replication_method = 'INCREMENTAL'
+    replication_keys = ['TxnDate']
+
+    # Columns requested from the report; override with config `general_ledger_columns`
+    DEFAULT_COLUMNS = 'tx_date,txn_type,doc_num,name,memo,split_acc,debt_amt,credit_amt,rbal_nat_amount'
+    # Window size (days) of every API call; a window is halved when QuickBooks rejects it as too large
+    GL_WINDOW_SIZE = 31
+
+    # report column key -> record field
+    COLUMN_FIELDS = {
+        'tx_date': 'TxnDate',
+        'txn_type': 'TxnType',
+        'doc_num': 'DocNumber',
+        'name': 'Name',
+        'memo': 'Memo',
+        'split_acc': 'SplitAccount',
+        'rbal_nat_amount': 'Balance',
+        'debt_amt': 'Debit',
+        'credit_amt': 'Credit',
+    }
+    AMOUNT_COLUMNS = ('rbal_nat_amount', 'debt_amt', 'credit_amt')
+    # Columns the record cannot be built without
+    REQUIRED_COLUMNS = ('tx_date', 'txn_type', 'debt_amt', 'credit_amt')
+
+    def sync(self):
+        bookmark = singer.get_bookmark(self.state, self.stream_name, 'LastUpdatedTime')
+        # Backdated entries (e.g. payroll) can land in closed days, so re-read a lookback window
+        lookback = int(self.config.get('general_ledger_lookback_days', 30))
+        if bookmark:
+            start_dttm = strptime_to_utc(bookmark) - timedelta(days=lookback)
+            start_dttm = max(start_dttm, strptime_to_utc(self.config.get('start_date')))
+        else:
+            start_dttm = strptime_to_utc(self.config.get('start_date'))
+
+        today = utils.now().date()
+        start = start_dttm.date()
+
+        while start <= today:
+            end = min(start + timedelta(days=self.GL_WINDOW_SIZE - 1), today)
+            for rec in self.sync_window(start, end):
+                yield rec
+
+            self.state = singer.write_bookmark(self.state, self.stream_name, 'LastUpdatedTime',
+                                               strptime_to_utc(str(end)).isoformat())
+            singer.write_state(self.state)
+            start = end + timedelta(days=1)
+
+        singer.write_state(self.state)
+
+    def sync_window(self, start, end):
+        """Fetch one date window, halving it when QuickBooks rejects it as too large."""
+        params = {
+            'start_date': str(start),
+            'end_date': str(end),
+            'columns': self.config.get('general_ledger_columns', self.DEFAULT_COLUMNS),
+            'sort_by': 'tx_date',
+            'sort_order': 'ascend',
+            'accounting_method': self.config.get('general_ledger_accounting_method', 'Accrual'),
+            'minorversion': self.client.minor_version,
+        }
+        try:
+            resp = self.client.get(self.endpoint, params=params)
+        except QuickbooksBadRequestError:
+            if start >= end:
+                raise
+            mid = start + (end - start) // 2
+            LOGGER.warning('GeneralLedger window %s..%s rejected, splitting at %s', start, end, mid)
+            yield from self.sync_window(start, mid)
+            yield from self.sync_window(mid + timedelta(days=1), end)
+            return
+
+        yield from self.parse_report(resp)
+
+    def parse_report(self, resp):
+        """Flatten the nested sections of a GeneralLedger response into one record per line."""
+        col_keys = []
+        for column in resp.get('Columns', {}).get('Column', []):
+            key = None
+            for meta in column.get('MetaData', []):
+                if meta.get('Name') == 'ColKey':
+                    key = meta.get('Value')
+            col_keys.append(key)
+
+        # QuickBooks silently ignores unknown columns, which would emit empty lines; fail loudly instead
+        if col_keys:
+            missing = [c for c in self.REQUIRED_COLUMNS if c not in col_keys]
+            if missing:
+                raise Exception('GeneralLedger report is missing required columns {}; check '
+                                'general_ledger_columns (got {})'.format(missing, col_keys))
+
+        seen = {}
+        for account_id, account_name, cols in self.walk_rows(resp.get('Rows', {}), None, None):
+            rec = self.build_record(col_keys, cols, account_id, account_name)
+            if rec is None:
+                continue
+            # Key on the line's identity, not its content, so an edited or backdated line overwrites its
+            # old row. Lines of one transaction share a date, hence a window, and keep their position
+            # within (transaction, account) between syncs. Without a transaction id fall back to content.
+            if rec.get('TxnId'):
+                fields = ('TxnType', 'TxnId', 'AccountId')
+            else:
+                fields = ('TxnType', 'TxnDate', 'DocNumber', 'AccountId', 'Name', 'Memo',
+                          'SplitAccount', 'Debit', 'Credit')
+            base = '|'.join(str(rec.get(k)) for k in fields)
+            seen[base] = seen.get(base, 0) + 1
+            rec['RowKey'] = hashlib.sha1('{}|{}'.format(base, seen[base]).encode()).hexdigest()
+            yield rec
+
+    def walk_rows(self, node, account_id, account_name):
+        """Yield (account_id, account_name, ColData) for every data row, tracking the enclosing account section."""
+        for row in node.get('Row', []):
+            if row.get('type') == 'Section' or 'Rows' in row:
+                header = row.get('Header', {}).get('ColData', [])
+                if header:
+                    # A section without an id (e.g. a parent account or "Not Specified") is not a real account
+                    inner_id, inner_name = header[0].get('id'), header[0].get('value')
+                else:
+                    inner_id, inner_name = account_id, account_name
+                yield from self.walk_rows(row.get('Rows', {}), inner_id, inner_name)
+            elif row.get('ColData') and row.get('type', 'Data') == 'Data':
+                yield account_id, account_name, row['ColData']
+
+    def build_record(self, col_keys, cols, account_id, account_name):
+        values = {}
+        ids = {}
+        for key, col in zip(col_keys, cols):
+            values[key] = col.get('value')
+            ids[key] = col.get('id')
+
+        txn_date = values.get('tx_date')
+        # Skip "Beginning Balance" and any other non-transaction row
+        if not txn_date or not re.match(r'^\d{4}-\d{2}-\d{2}$', txn_date):
+            return None
+
+        rec = {
+            'AccountId': account_id,
+            'AccountName': account_name,
+            'TxnId': ids.get('txn_type') or ids.get('tx_date') or ids.get('doc_num'),
+        }
+        for key, field in self.COLUMN_FIELDS.items():
+            if key in values:
+                rec[field] = self.to_amount(values[key]) if key in self.AMOUNT_COLUMNS else (values[key] or None)
+
+        # QuickBooks leaves the unused side blank
+        rec['Debit'] = rec.get('Debit') or 0.0
+        rec['Credit'] = rec.get('Credit') or 0.0
+        return rec
+
+    @staticmethod
+    def to_amount(value):
+        if value in (None, ''):
+            return None
+        try:
+            return float(str(value).replace(',', ''))
+        except ValueError:
+            return None
+
+
 class DeletedObjects(Stream):
     endpoint = '/v3/company/{realm_id}/cdc'
     stream_name = 'deleted_objects'
@@ -459,5 +630,6 @@ STREAM_OBJECTS = {
     "vendor_credits": VendorCredits,
     "vendors": Vendors,
     "profit_loss_report": ProfitAndLossReport,
+    "general_ledger_report": GeneralLedgerReport,
     "deleted_objects": DeletedObjects
 }
