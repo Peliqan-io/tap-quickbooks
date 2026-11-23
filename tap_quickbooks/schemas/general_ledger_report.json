@@ -1,0 +1,86 @@
+{
+    "type": [
+        "null",
+        "object"
+    ],
+    "properties": {
+        "RowKey": {
+            "type": [
+                "string"
+            ]
+        },
+        "TxnDate": {
+            "type": [
+                "null",
+                "string"
+            ],
+            "format": "date-time"
+        },
+        "TxnType": {
+            "type": [
+                "null",
+                "string"
+            ]
+        },
+        "TxnId": {
+            "type": [
+                "null",
+                "string"
+            ]
+        },
+        "DocNumber": {
+            "type": [
+                "null",
+                "string"
+            ]
+        },
+        "AccountId": {
+            "type": [
+                "null",
+                "string"
+            ]
+        },
+        "AccountName": {
+            "type": [
+                "null",
+                "string"
+            ]
+        },
+        "Name": {
+            "type": [
+                "null",
+                "string"
+            ]
+        },
+        "Memo": {
+            "type": [
+                "null",
+                "string"
+            ]
+        },
+        "SplitAccount": {
+            "type": [
+                "null",
+                "string"
+            ]
+        },
+        "Debit": {
+            "type": [
+                "null",
+                "number"
+            ]
+        },
+        "Credit": {
+            "type": [
+                "null",
+                "number"
+            ]
+        },
+        "Balance": {
+            "type": [
+                "null",
+                "number"
+            ]
+        }
+    }
+}
